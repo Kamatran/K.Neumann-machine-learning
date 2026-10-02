@@ -1,0 +1,78 @@
+# From W2: MLflow with PostgreSQL (runs) and MinIO (files of the runs).
+# In W1 the same server runs without containers: scripts/mlflow_local.sh.
+# Host ports avoid the Big Data stack (9000, 9001, 8000, 8888).
+name: ml-project
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    # Runs as you, so that state/postgres/ stays yours and save_state.sh can archive it.
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: mlflow
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./state/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow -d mlflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --console-address ":9001"
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9100:9000"   # S3 API
+      - "9101:9001"   # web console
+    volumes:
+      - ./state/minio:/data
+    restart: unless-stopped
+
+  # One-off job: creates the artifact bucket, then exits.
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    depends_on:
+      - minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do sleep 1; done
+        mc mb --ignore-existing local/mlflow
+    restart: "no"
+
+  mlflow:
+    build: docker/mlflow
+    image: ml-course/mlflow:3.16.0
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      HOME: /tmp
+      # Background job runner for GenAI features (8 extra processes, about 1 GiB); not used here.
+      MLFLOW_SERVER_ENABLE_JOB_EXECUTION: "false"
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+    # Artifacts are proxied through MLflow. One worker: a single user does not need more,
+    # and each worker holds its own copy of the application in memory.
+    command: >
+      mlflow server --host 0.0.0.0 --port 5000 --workers 1
+      --backend-store-uri postgresql://mlflow:${POSTGRES_PASSWORD}@postgres:5432/mlflow
+      --artifacts-destination s3://mlflow
+    ports:
+      - "5000:5000"
+    restart: unless-stopped

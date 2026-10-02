@@ -1,0 +1,40 @@
+# Data and results never go to Git
+data/*
+!data/.gitkeep
+state/minio/*
+!state/minio/.gitkeep
+state/mlflow/*
+!state/mlflow/.gitkeep
+state/postgres/*
+!state/postgres/.gitkeep
+state/mlartifacts/
+state/mlflow.db
+mlruns/
+mlartifacts/
+
+# Model weights and checkpoints: log them to MLflow instead
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
+
+# Archives: downloaded datasets and state backups from scripts/save_state.sh
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+
+# Secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+*.egg-info/
+.ipynb_checkpoints/
+.pytest_cache/
+
+# Editor settings
+.vscode/
