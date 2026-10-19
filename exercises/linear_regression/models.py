@@ -55,3 +55,4 @@ if __name__ == "__main__":
 
             mlflow.log_param("n_features", features)
             mlflow.log_metric("val_mse", val_mse)
+
